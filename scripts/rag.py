@@ -107,8 +107,9 @@ def retrieve(query_text, embed_fn, top_k=3, collection=None):
     ]
 
 
-def index_knowledge(folder, embed_many_fn=None, collection=None):
-    """Walk folder, chunk all supported docs, embed, and upsert into ChromaDB."""
+def index_knowledge(target, embed_many_fn=None, collection=None):
+    """Walk a folder (or index a single file), chunk all supported docs, embed,
+    and upsert into ChromaDB. Re-indexing is idempotent (upsert by chunk id)."""
     from ollama_client import embed_many as default_embed_many
 
     embed_many_fn = embed_many_fn or default_embed_many
@@ -117,10 +118,14 @@ def index_knowledge(folder, embed_many_fn=None, collection=None):
         collection = get_collection(client)
 
     files = []
-    for root, _dirs, names in os.walk(folder):
-        for n in sorted(names):
-            if n.lower().endswith((".pdf", ".md", ".txt")):
-                files.append(os.path.join(root, n))
+    if os.path.isfile(target):
+        if target.lower().endswith((".pdf", ".md", ".txt")):
+            files.append(target)
+    else:
+        for root, _dirs, names in os.walk(target):
+            for n in sorted(names):
+                if n.lower().endswith((".pdf", ".md", ".txt")):
+                    files.append(os.path.join(root, n))
 
     total_chunks = 0
     for path in files:

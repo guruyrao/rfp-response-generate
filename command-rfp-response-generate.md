@@ -14,7 +14,7 @@ You are executing the rfp-response-generate skill. Load the skill context, then 
 
 ## Arguments
 
-- Agent name: `$1` — one of: `extract_requirements`, `knowledge_store`, `generate_response`, `review_compliance`, `all`
+- Agent name: `$1` — one of: `extract_requirements`, `knowledge_store`, `generate_response`, `review_compliance`, `query_kb`, `all`
 - Optional path: `$2` (RFP file for agent 1/3, knowledge dir for agent 2, draft for agent 4)
 - Remaining input: `$ARGUMENTS` (e.g. `--feedback "..."`)
 
@@ -25,15 +25,18 @@ Run the matching script with `py -3.10` under `scripts/`:
 | Agent (`$1`) | Script | Extra arg |
 |---|---|---|
 | `extract_requirements` | `extract_requirements.py` | `$2` = RFP pdf/md/txt (default: first file in `C:\rag\source\`) |
-| `knowledge_store` | `knowledge_store.py` | `$2` = knowledge folder (default: `C:\rag\knowledge\`) |
+| `knowledge_store` | `knowledge_store.py` | `$2` = knowledge folder **or a single pdf/md/txt** (default: `C:\rag\knowledge\`) |
 | `generate_response` | `generate_response.py` | `$2` = requirements json (default: latest in `C:\rag\chunks\`) |
 | `review_compliance` | `review_compliance.py` | `$2` = draft md (default: latest in `C:\rag\output\`); pass `--feedback "..."` via `$ARGUMENTS` |
 | `all` | `run_all.py` | `$2` = RFP pdf (optional) |
+| `query_kb` | `query_kb.py` | `$2` = question; test retrieval from the knowledge base only (no pipeline) |
 
 Example:
 ```
 /rfp-response-generate extract_requirements sample_data\source\sample_rfp.md
 /rfp-response-generate knowledge_store sample_data\knowledge
+/rfp-response-generate knowledge_store sample_data\knowledge\qa_coaching_platform_spec.md
+/rfp-response-generate query_kb "automated coaching workflows"
 /rfp-response-generate generate_response
 /rfp-response-generate review_compliance --feedback "Add pricing section per reviewer comment"
 /rfp-response-generate all sample_data\source\sample_rfp.md
