@@ -18,6 +18,30 @@ class NoDocumentText(Exception):
     pass
 
 
+def clean_extracted_text(text):
+    """Normalize raw PDF text: drop bullets/footers, collapse whitespace runs."""
+    lines = text.splitlines()
+    cleaned = []
+    footer_pat = re.compile(
+        r"^[\s\u00a0]*[©\u00a9\u00ff]+.*(?:rights reserved|Inc\.|Inc|Corp|Limited|Ltd)"
+        r"|^\s*page\s*\d+\s*$", re.IGNORECASE)
+    for raw in lines:
+        line = raw.replace("\ufffd", "'").replace("\u00a0", " ").strip()
+        if not line:
+            continue
+        if footer_pat.match(line):
+            continue
+        # skip lines that are pure bullet glyphs / page furniture
+        if re.fullmatch(r"[\-\u2022\u00b7\ufffd\s\.]+", line):
+            continue
+        # collapse internal runs of spaces (PDF justification artifacts)
+        line = re.sub(r"[ \t]{2,}", " ", line)
+        cleaned.append(line)
+    out = "\n".join(cleaned)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
 def extract_text(path):
     """Extract plain text from pdf/md/txt."""
     ext = os.path.splitext(path)[1].lower()
@@ -27,7 +51,7 @@ def extract_text(path):
         doc = fitz.open(path)
         text = "\n\n".join(page.get_text() for page in doc)
         doc.close()
-        return text
+        return clean_extracted_text(text)
     if ext in (".md", ".txt"):
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             return f.read()
@@ -35,10 +59,11 @@ def extract_text(path):
 
 
 def split_sections(text):
-    """Split markdown-ish text into (header, body) sections on heading lines."""
+    """Split markdown-ish text into (header, body) sections on heading lines.
+    Non-heading text is grouped under an empty header."""
     lines = text.splitlines()
     sections = []
-    cur_header = "DOCUMENT"
+    cur_header = ""
     cur_body = []
     for line in lines:
         if re.match(r"^#{1,4}\s", line.strip()):
@@ -62,11 +87,11 @@ def chunk_text(text, chunk_chars=CHUNK_CHARS, overlap=OVERLAP_CHARS):
         buf = ""
         for p in paras:
             if len(buf) + len(p) + 2 > chunk_chars and buf:
-                chunks.append(header + "\n\n" + buf.strip())
+                chunks.append((header + "\n\n" + buf.strip()).strip() if header else buf.strip())
                 buf = buf[-overlap:] if len(buf) > overlap else ""
             buf = (buf + "\n\n" + p).strip()
         if buf:
-            chunks.append(header + "\n\n" + buf.strip())
+            chunks.append((header + "\n\n" + buf.strip()).strip() if header else buf.strip())
     if not chunks and text.strip():
         chunks = [text.strip()]
     return chunks
@@ -109,7 +134,8 @@ def retrieve(query_text, embed_fn, top_k=3, collection=None):
 
 def index_knowledge(target, embed_many_fn=None, collection=None):
     """Walk a folder (or index a single file), chunk all supported docs, embed,
-    and upsert into ChromaDB. Re-indexing is idempotent (upsert by chunk id)."""
+    and upsert into ChromaDB. Re-indexing a source replaces its old chunks
+    (delete-by-source before upsert), so edits don't leave stale duplicates."""
     from ollama_client import embed_many as default_embed_many
 
     embed_many_fn = embed_many_fn or default_embed_many
@@ -129,6 +155,7 @@ def index_knowledge(target, embed_many_fn=None, collection=None):
 
     total_chunks = 0
     for path in files:
+        source = os.path.basename(path)
         try:
             text = extract_text(path)
         except NoDocumentText as e:
@@ -140,9 +167,13 @@ def index_knowledge(target, embed_many_fn=None, collection=None):
         ids = [chunk_id(path, i) for i in range(len(chunks))]
         docs = chunks
         metas = [
-            {"source": os.path.basename(path), "chunk": i, "path": path}
+            {"source": source, "chunk": i, "path": path}
             for i in range(len(chunks))
         ]
+        try:
+            collection.delete(where={"source": source})
+        except Exception:
+            pass
         for start in range(0, len(docs), 20):
             batch_slice = slice(start, start + 20)
             emb = embed_many_fn(docs[batch_slice])
@@ -153,7 +184,7 @@ def index_knowledge(target, embed_many_fn=None, collection=None):
                 metadatas=metas[batch_slice],
             )
         total_chunks += len(chunks)
-        print(f"  indexed {os.path.basename(path)}: {len(chunks)} chunks")
+        print(f"  indexed {source}: {len(chunks)} chunks")
 
     print(f"Total chunks indexed: {total_chunks}")
     return total_chunks
