@@ -29,7 +29,7 @@ Run the matching script with `py -3.10` under `scripts/`:
 | `generate_response` | `generate_response.py` | `$2` = requirements json (default: latest in `C:\rag\chunks\`) |
 | `review_compliance` | `review_compliance.py` | `$2` = draft md (default: latest in `C:\rag\output\`); pass `--feedback "..."` via `$ARGUMENTS` |
 | `all` | `run_all.py` | `$2` = RFP pdf (optional) |
-| `query_kb` | `query_kb.py` | `$2` = question; test retrieval from the knowledge base only (no pipeline) |
+| `query_kb` | `query_kb.py` | `$2` = question; test retrieval from the knowledge base only (no pipeline). Add `--ask` to get an LLM answer grounded in the retrieved chunks |
 
 Example:
 ```
@@ -37,6 +37,7 @@ Example:
 /rfp-response-generate knowledge_store sample_data\knowledge
 /rfp-response-generate knowledge_store sample_data\knowledge\qa_coaching_platform_spec.md
 /rfp-response-generate query_kb "automated coaching workflows"
+/rfp-response-generate query_kb "automated coaching workflows" --ask
 /rfp-response-generate generate_response
 /rfp-response-generate review_compliance --feedback "Add pricing section per reviewer comment"
 /rfp-response-generate all sample_data\source\sample_rfp.md
