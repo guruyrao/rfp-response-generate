@@ -38,11 +38,52 @@ def find_requirements(arg):
 
 
 def load_template():
-    tpl_path = os.path.join(RAG_ROOT, "templates", "response_template.md")
-    if os.path.isfile(tpl_path):
-        with open(tpl_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
+    """Return the org template content used as the format reference.
+
+    Prefers a PDF template in templates/ (the ATMECS response PDF if present),
+    falling back to response_template.md, then a minimal default skeleton. The
+    returned text is passed to the LLM as {templates} so each drafted section
+    follows the template's structure/tone/format. Env TEMPLATE_FILE overrides.
+    """
+    templates_dir = os.path.join(RAG_ROOT, "templates")
+    override = os.environ.get("TEMPLATE_FILE")
+    if override and os.path.isfile(override):
+        return _read_template(override)
+    if os.path.isdir(templates_dir):
+        if os.path.isfile(os.path.join(templates_dir, "ATMECS-TUI Cloud Engineering - RFP Response - v1.0.pdf")):
+            pdf_path = os.path.join(templates_dir, "ATMECS-TUI Cloud Engineering - RFP Response - v1.0.pdf")
+            return _read_template(pdf_path)
+        for name in sorted(os.listdir(templates_dir)):
+            if name.lower().endswith(".pdf") and os.path.isfile(os.path.join(templates_dir, name)):
+                return _read_template(os.path.join(templates_dir, name))
+        md_path = os.path.join(templates_dir, "response_template.md")
+        if os.path.isfile(md_path):
+            return _read_template(md_path)
+    # default skeleton if no template found
+    return "# {rfp_title}\n\n## 1. Executive Summary\n\n## 2. Requirements Response\n\n## 3. Compliance\n"
+
+
+def _read_template(path):
+    import rag as _rag
+    try:
+        return _rag.extract_text(path)
+    except Exception:
+        return ""
+
+
+def clean_template_for_llm(template_text, cap=12000):
+    """Compact the (possibly large PDF) template into a structure summary for the
+    per-criterion drafting prompt, so the LLM matches format/tone without a
+    90k-token payload per call. Returns top-level numbered section titles only
+    (e.g. "1. Executive Summary") plus a short body excerpt.
+    """
+    import re as _re
+    heads = [m.strip() for m in _re.findall(r"^\d+\.\s+[A-Za-z][A-Za-z &'/\-():,]+$", template_text, _re.MULTILINE)]
+    head_str = "TEMPLATE TOP-LEVEL SECTIONS (match this structure/format):\n" + "\n".join(heads[:40])
+    if len(template_text) <= cap:
+        return head_str + "\n\n" + template_text
+    head_str += "\n\nTEMPLATE EXCERPT (tone/format reference):\n" + template_text[:cap - len(head_str) - 300]
+    return head_str
 
 
 def main():
@@ -73,8 +114,12 @@ def main():
 
     template = load_template()
     if not template:
-        print("[Agent 3] WARNING: no templates/response_template.md found; using default structure", file=sys.stderr)
+        print("[Agent 3] WARNING: no template found in templates/ ; using default structure", file=sys.stderr)
         template = "# {rfp_title}\n\n## 1. Executive Summary\n\n## 2. Requirements Response\n\n## 3. Compliance\n"
+
+    # Template is shown to the LLM as the format/tone reference. For a large PDF
+    # template, pass a structure summary so we don't burn 90k tokens per call.
+    template_for_llm = clean_template_for_llm(template)
 
     draft_prompt = load_prompt(DRAFT_PROMPT)
 
@@ -106,7 +151,7 @@ def main():
             draft_prompt.replace("{criterion_text}", text)
             .replace("{category}", crit.get("category", ""))
             .replace("{priority}", crit.get("priority", ""))
-            .replace("{templates}", template)
+            .replace("{templates}", template_for_llm)
             .replace("{retrieved_context}", retrieved_context)
         )
 
@@ -117,39 +162,107 @@ def main():
             print(f"  [{idx}/{len(criteria)}] FAILED: {e}")
             section = f"**{text}**\n\n> Draft failed — review required.\n"
         section = section.strip()
+        # strip leading template-subsection headings the LLM may echo (e.g. "### 2.3.5. Title")
+        section = re.sub(r"^\s*###\s*\d+(?:\.\d+)*\.?\s+[^\n]*\n+", "", section).strip()
         with open(cp, "w", encoding="utf-8") as f:
             f.write(section)
         sections.append(section)
 
     rfp_title = base.replace("_", " ").replace("-", " ").title()
 
-    # Assemble into template shape. If the template has numbered headings, fill under Requirements Response.
+    # Assemble: use the template skeleton (the ATMECS PDF structure, cleaned) as
+    # the document body, and insert each drafted requirement under the most
+    # relevant numbered section. Unmatched requirements fall into a
+    # "Requirements Response" section so nothing is lost.
     header = re.sub(r"\{rfp_title\}", rfp_title, template)
-
-    body = []
+    body_parts = []
     for idx, crit in enumerate(criteria, 1):
         text = crit.get("criterion_text", "").strip()
         if not text:
             continue
-        sec = sections[len(body)]
-        body.append(f"### {idx}. {text}\n\n{sec}")
-    filled = header
-    if "## 2. Requirements Response" in filled:
-        filled = filled.replace(
-            "## 2. Requirements Response",
-            "## 2. Requirements Response\n\n" + "\n\n".join(body),
-            1,
-        )
-    else:
-        filled = filled + "\n\n## Requirements Response\n\n" + "\n\n".join(body)
+        sec = sections[len(body_parts)]
+        body_parts.append(f"### {idx}. {text}\n\n{sec}")
+
+    assembled = insert_requirements_into_template(header, criteria, body_parts, rfp_title)
 
     if not out:
         out = os.path.join(RAG_ROOT, "output", f"{base}_response_v1.md")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
-        f.write(filled.rstrip() + "\n")
+        f.write(assembled.rstrip() + "\n")
 
     print(f"[Agent 3] Draft saved -> {out}")
+
+
+# Map criterion category -> template section (top-level "N. Title") keywords.
+SECTION_KEYWORDS = {
+    "pricing": "Pricing",
+    "commercial": "Pricing",
+    "integration": "Roles and Responsibilities",
+    "security": "Governance",
+    "compliance": "Governance",
+    "talent": "Talent Acquisition & Retention",
+    "support": "Roles and Responsibilities",
+    "technical": "Cloud Services",
+}
+
+
+def insert_requirements_into_template(template_text, criteria, body_parts, rfp_title):
+    """Append drafted requirement sections as a structured REQUIREMENTS RESPONSE
+    appendix to the template skeleton.
+
+    We do not perform fragile in-place anchor replacement on the template (PDF
+    text contains a table of contents where section-number anchors first match
+    TOC lines, corrupting the document). Instead, the template's full structure
+    and tone are preserved verbatim, and a consolidated, well-ordered
+    "Requirements Response" section is appended at the end — grouped by the
+    template section each requirement maps to (so a reviewer sees, e.g., the
+    security requirements under a "Governance" group).
+    """
+    import re as _re
+
+    outline = _re.findall(r"(\d+(?:\.\d+)?)\.?\s+([A-Za-z][A-Za-z &'/\-():,]+)\n", template_text)
+    section_titles = [name.strip() for _num, name in outline]
+
+    def map_section(crit):
+        cat = (crit.get("category") or "").lower()
+        ctext = (crit.get("criterion_text", "")).lower()
+        for kw, dst in SECTION_KEYWORDS.items():
+            if kw in cat or kw in ctext:
+                # confirm the template actually has this section
+                if any(dst.lower() in t.lower() for t in section_titles):
+                    return dst
+        return None
+
+    groups = {}
+    unmapped = []
+    for crit, part in zip(criteria, body_parts):
+        dst = map_section(crit)
+        if dst:
+            groups.setdefault(dst, []).append(part)
+        else:
+            unmapped.append(part)
+
+    out = template_text.replace("{rfp_title}", rfp_title) if False else template_text
+    out = out.rstrip()
+
+    parts = []
+    # keep template section order when grouping
+    for title in section_titles:
+        if title in groups:
+            parts.append(f"\n### {title}\n")
+            for g in groups[title]:
+                parts.append(g)
+            parts.append("")
+    if unmapped:
+        parts.append("\n### General / Unmapped Requirements\n")
+        for u in unmapped:
+            parts.append(u)
+            parts.append("")
+
+    if parts:
+        out = out + "\n\n## REQUIREMENTS RESPONSE\n\n" + "\n".join(parts).rstrip() + "\n"
+    return out
 
 
 if __name__ == "__main__":
