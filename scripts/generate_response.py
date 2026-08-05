@@ -17,12 +17,20 @@ from ollama_client import chat_retry, embed, embed_many
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAFT_PROMPT = os.path.join(BASE_DIR, "prompts", "draft_section.md")
+ADD_INSTRUCTIONS = os.path.join(BASE_DIR, "prompts", "additional_instructions.md")
 RAG_ROOT = os.environ.get("RAG_ROOT", r"C:\rag")
 
 
 def load_prompt(path):
+    if not os.path.isfile(path):
+        return ""
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+def load_additional_instructions():
+    """Load the extra RFP response instructions (if provided) as drafting rules."""
+    return load_prompt(ADD_INSTRUCTIONS).strip()
 
 
 def find_requirements(arg):
@@ -122,11 +130,15 @@ def main():
     template_for_llm = clean_template_for_llm(template)
 
     draft_prompt = load_prompt(DRAFT_PROMPT)
+    add_instr = load_additional_instructions()
+    if add_instr:
+        draft_prompt = draft_prompt + "\n\n# ADDITIONAL INSTRUCTIONS (MANDATORY)\n" + add_instr
 
     client = rag.get_client()
     collection = rag.get_collection(client)
 
     sections = []
+    coverage = []  # (criterion_text, section_label, status) for the compliance matrix
     results_dir = os.path.join(os.path.dirname(req_path), "agent3_sections")
     os.makedirs(results_dir, exist_ok=True)
 
@@ -137,7 +149,9 @@ def main():
         cp = os.path.join(results_dir, f"section_{idx:02d}.md")
         if os.path.exists(cp):
             with open(cp, "r", encoding="utf-8") as f:
-                sections.append(f.read())
+                section = f.read()
+            sections.append(section)
+            coverage.append((text, map_section_label(crit), "draft"))
             print(f"  [{idx}/{len(criteria)}] section {idx} (cached)")
             continue
 
@@ -167,6 +181,8 @@ def main():
         with open(cp, "w", encoding="utf-8") as f:
             f.write(section)
         sections.append(section)
+        status = "covered" if retrieved else "gap"
+        coverage.append((text, map_section_label(crit), status))
 
     rfp_title = base.replace("_", " ").replace("-", " ").title()
 
@@ -184,6 +200,10 @@ def main():
         body_parts.append(f"### {idx}. {text}\n\n{sec}")
 
     assembled = insert_requirements_into_template(header, criteria, body_parts, rfp_title)
+
+    # Instruction #9: RFP Compliance Coverage matrix.
+    matrix = build_compliance_matrix(criteria, coverage)
+    assembled = assembled.rstrip() + "\n\n---\n\n## REQUIREMENTS RESPONSE -- Compliance Coverage Matrix\n\n" + matrix + "\n"
 
     if not out:
         out = os.path.join(RAG_ROOT, "output", f"{base}_response_v1.md")
@@ -205,6 +225,36 @@ SECTION_KEYWORDS = {
     "support": "Roles and Responsibilities",
     "technical": "Cloud Services",
 }
+
+
+def map_section_label(crit):
+    """Return the template section label a criterion maps to (or 'General')."""
+    cat = (crit.get("category") or "").lower()
+    ctext = (crit.get("criterion_text") or "").lower()
+    for kw, dst in SECTION_KEYWORDS.items():
+        if kw in cat or kw in ctext:
+            return dst
+    return "General / Unmapped"
+
+
+def build_compliance_matrix(criteria, coverage):
+    """RFP Compliance Coverage matrix (instruction #9)."""
+    lines = [
+        "| RFP Requirement | Addressed Section | Status |",
+        "|---|---|---|",
+    ]
+    for crit, cov in zip(criteria, coverage):
+        text = (crit.get("criterion_text") or "").strip()[:80]
+        sec_label = cov[1] if len(cov) > 1 else map_section_label(crit)
+        status = cov[2] if len(cov) > 2 else "draft"
+        if status == "gap":
+            mark = "[GAP] Uncovered"
+        elif status in ("covered", "draft", "cached"):
+            mark = "[OK] Covered"
+        else:
+            mark = "[PARTIAL] Review"
+        lines.append(f"| {text} | {sec_label} | {mark} |")
+    return "\n".join(lines)
 
 
 def insert_requirements_into_template(template_text, criteria, body_parts, rfp_title):
