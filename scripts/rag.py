@@ -60,13 +60,35 @@ def extract_text(path):
 
 def split_sections(text):
     """Split markdown-ish text into (header, body) sections on heading lines.
-    Non-heading text is grouped under an empty header."""
+    Recognizes markdown ('#..'), numbered ('1.', '1.1.', '2.3.5.'), and
+    all-caps / Title Case short heading lines. Non-heading text is grouped
+    under an empty header."""
     lines = text.splitlines()
     sections = []
     cur_header = ""
     cur_body = []
+
+    def is_heading(line):
+        s = line.strip()
+        if not s:
+            return False
+        # markdown headings: "# ..", "## .."
+        if re.match(r"^#{1,6}\s", s):
+            return True
+        # numbered heading — bare number "1.1." OR "1.1. Title Words" (short, no period end)
+        if re.match(r"^\d+(?:\.\d+)*\.?\s*$", s):
+            return True
+        if re.match(r"^\d+(?:\.\d+)*\.\s+[A-Za-z]", s) and len(s) <= 90 \
+                and not re.search(r"[.?!]\s*$", s):
+            return True
+        # short Title Case or ALL-CAPS heading line with no ending punctuation
+        if len(s) <= 70 and not re.search(r"[.?!:;]\s*$", s):
+            if s.isupper() or re.match(r"^[A-Z][a-zA-Z]", s):
+                return True
+        return False
+
     for line in lines:
-        if re.match(r"^#{1,4}\s", line.strip()):
+        if is_heading(line):
             if cur_body:
                 sections.append((cur_header, "\n".join(cur_body)))
             cur_header = line.strip()
@@ -78,14 +100,36 @@ def split_sections(text):
     return sections
 
 
+def _hard_split(text, chunk_chars, overlap):
+    """Split a single oversized paragraph at word boundaries."""
+    words = text.split()
+    parts, buf = [], ""
+    for w in words:
+        if len(buf) + len(w) + 1 > chunk_chars and buf:
+            parts.append(buf)
+            buf = buf[-overlap:].rsplit(" ", 1)[-1] if overlap else ""
+        buf = (buf + " " + w).strip()
+    if buf:
+        parts.append(buf)
+    return parts or [text]
+
+
 def chunk_text(text, chunk_chars=CHUNK_CHARS, overlap=OVERLAP_CHARS):
-    """Split text into overlapping chunks at paragraph/word boundaries."""
+    """Split text into overlapping chunks at section/paragraph boundaries,
+    hard-capping any paragraph that exceeds chunk_chars."""
     chunks = []
     sections = split_sections(text)
     for header, body in sections:
-        paras = [p.strip() for p in body.split("\n\n") if p.strip()]
+        paras = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
         buf = ""
         for p in paras:
+            if len(p) > chunk_chars:
+                if buf:
+                    chunks.append((header + "\n\n" + buf.strip()).strip() if header else buf.strip())
+                    buf = ""
+                for part in _hard_split(p, chunk_chars, overlap):
+                    chunks.append((header + "\n\n" + part.strip()).strip() if header else part.strip())
+                continue
             if len(buf) + len(p) + 2 > chunk_chars and buf:
                 chunks.append((header + "\n\n" + buf.strip()).strip() if header else buf.strip())
                 buf = buf[-overlap:] if len(buf) > overlap else ""
@@ -93,7 +137,7 @@ def chunk_text(text, chunk_chars=CHUNK_CHARS, overlap=OVERLAP_CHARS):
         if buf:
             chunks.append((header + "\n\n" + buf.strip()).strip() if header else buf.strip())
     if not chunks and text.strip():
-        chunks = [text.strip()]
+        chunks = _hard_split(text.strip(), chunk_chars, overlap)
     return chunks
 
 
