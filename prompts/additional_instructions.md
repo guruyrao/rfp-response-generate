@@ -348,6 +348,68 @@ No validated RPA content exists in the knowledge repository.
 
 ---
 
+## 11. Knowledge Consolidation and Best-Fit Content Selection
+
+When retrieving content from the knowledge store, multiple documents may contain overlapping, duplicated, or similar information.
+
+### Instructions
+
+- Perform semantic comparison across all retrieved knowledge-store sources.
+- Identify duplicate, redundant, or conflicting content.
+- Consolidate relevant information into a single coherent response rather than combining all source material verbatim.
+
+### Prioritize content based on:
+
+- Relevance to the specific RFP requirement
+- Alignment with the client's industry and business objectives
+- Similarity to the requested scope of work
+- Recency and maturity of the referenced capability
+- Completeness and quality of supporting evidence
+
+### Response Selection Rules
+
+When multiple knowledge-store documents address the same requirement:
+
+- Select the source that most closely aligns with the RFP requirement.
+- Use supporting information from secondary sources only when it enhances the response.
+- Eliminate duplicate statements, repetitive messaging, and overlapping descriptions.
+- Generate a unified response that reads as a single proposal narrative.
+- Avoid presenting multiple variations of the same capability description.
+
+### Example
+
+If the knowledge store contains:
+
+- DevOps Transformation for Banking
+- Cloud Automation Program for Retail
+- CI/CD Modernization Framework
+- Application Delivery Excellence Framework
+
+And the RFP requests:
+
+> Enterprise DevSecOps Delivery Model for a Financial Services Organization
+
+The agent should:
+
+- Prioritize the banking-related DevOps content.
+- Supplement with relevant CI/CD and automation capabilities.
+- Exclude redundant descriptions from other sources.
+- Produce a single integrated DevSecOps response aligned to the financial-services RFP context.
+
+### Conflict Resolution
+
+If multiple sources contain conflicting information:
+
+- Prefer validated and authoritative knowledge-store content.
+- Flag inconsistencies for review rather than arbitrarily selecting one version.
+- Do not merge conflicting facts, metrics, staffing numbers, certifications, or delivery outcomes.
+
+### Governing Principle for Knowledge Consolidation
+
+When multiple knowledge-store sources are available, the objective is not to maximize content reuse but to maximize relevance, accuracy, and alignment with the RFP. The generated response should represent the best-fit, consolidated answer for each requirement while eliminating redundancy, duplication, and conflicting information.
+
+---
+
 # Recommended Governing Principle
 
 Add the following as a final instruction:
