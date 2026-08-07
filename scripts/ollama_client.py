@@ -3,8 +3,9 @@ default; embeddings stay on local Ollama (cloud providers have no embeddings).
 
 Provider switch:
   LLM_PROVIDER=groq    (default) -> Groq OpenAI-compatible /chat/completions
-  LLM_PROVIDER=deepseek           -> DeepSeek OpenAI-compatible /chat/completions
-  LLM_PROVIDER=ollama             -> local Ollama /api/chat
+   LLM_PROVIDER=deepseek           -> DeepSeek OpenAI-compatible /chat/completions
+   LLM_PROVIDER=ollama             -> local Ollama /api/chat (no API key / quota)
+                                       Set OLLAMA_MODEL (default deepseek-r1:7b)
 
 Env overrides:
   GROQ_API_KEY       (falls back to ~/.local/share/opencode/auth.json groq.key)
@@ -14,7 +15,8 @@ Env overrides:
   DEEPSEEK_BASE_URL  (default https://api.deepseek.com/v1)
   DEEPSEEK_MODEL     (default deepseek-v4-flash)
   OLLAMA_URL         (default http://localhost:11434)
-  EMBED_MODEL        (default nomic-embed-text)
+   EMBED_MODEL        (default nomic-embed-text)
+   OLLAMA_MODEL        (default deepseek-r1:7b)
 """
 import json
 import os
@@ -28,6 +30,7 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "deepseek-r1:7b")
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq")
 
 
@@ -116,7 +119,7 @@ def _chat_ollama(system_prompt, user_prompt, model, format_json):
 def chat(system_prompt, user_prompt, model=None, format_json=True):
     """Call the LLM. Returns parsed JSON if format_json, else raw text."""
     if model is None:
-        model = {"groq": GROQ_MODEL, "deepseek": DEEPSEEK_MODEL, "ollama": DEEPSEEK_MODEL}[LLM_PROVIDER]
+        model = {"groq": GROQ_MODEL, "deepseek": DEEPSEEK_MODEL, "ollama": OLLAMA_MODEL}[LLM_PROVIDER]
     if LLM_PROVIDER == "ollama":
         content = _chat_ollama(system_prompt, user_prompt, model, format_json)
     elif LLM_PROVIDER == "deepseek":
