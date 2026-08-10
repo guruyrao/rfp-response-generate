@@ -31,6 +31,23 @@ def find_rfp(arg):
     return None
 
 
+def normalize_criteria(parsed):
+    """Accept a list of criteria, a {"criteria": [...]} wrapper, or a single
+    criterion object (some LLMs return a bare object instead of an array)."""
+    if isinstance(parsed, list):
+        return [c for c in parsed if isinstance(c, dict) and c.get("criterion_text")]
+    if isinstance(parsed, dict):
+        for key in ("criteria", "requirements", "results", "items", "data"):
+            val = parsed.get(key)
+            if isinstance(val, list):
+                cleaned = [c for c in val if isinstance(c, dict) and c.get("criterion_text")]
+                if cleaned:
+                    return cleaned
+        if parsed.get("criterion_text"):
+            return [parsed]
+    return []
+
+
 def main():
     args = sys.argv[1:]
     rfp = None
@@ -63,7 +80,9 @@ def main():
     system_prompt = load_prompt()
     all_criteria = []
 
-    results_dir = os.path.join(os.path.dirname(out), "agent1_chunks")
+    # Per-RFP cache dir so chunks from one source never mix with another
+    # (e.g. a prior sample_rfp run reusing chunk_01.json for a different RFP).
+    results_dir = os.path.join(os.path.dirname(out), f"agent1_chunks_{base}_requirements")
     os.makedirs(results_dir, exist_ok=True)
 
     for i, chunk in enumerate(chunks, 1):
@@ -82,7 +101,7 @@ def main():
             print(f"  [{i}/{len(chunks)}] FAILED: {e}")
             continue
 
-        criteria = parsed if isinstance(parsed, list) else parsed.get("criteria", [])
+        criteria = normalize_criteria(parsed)
         for c in criteria:
             c["source_reference"] = c.get("source_reference") or f"{base} chunk {i}"
             c["chunk"] = i

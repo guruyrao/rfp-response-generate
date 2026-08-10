@@ -34,14 +34,35 @@ def load_additional_instructions():
 
 
 def find_requirements(arg):
-    if arg and os.path.isfile(arg):
-        return arg
+    """Return the requirements JSON strictly for the requested RFP.
+
+    If arg is a path to a *_requirements.json, use exactly that file. If arg is
+    a source RFP (pdf/md/txt), derive its requirements JSON by base name. Never
+    fall back to an arbitrary *_requirements.json from chunks/ (that can pull in
+    a different RFP's requirements, e.g. sample_rfp_requirements.json).
+    """
+    if arg:
+        p = os.path.abspath(arg)
+        if not os.path.isfile(p):
+            return None
+        lower = p.lower()
+        if lower.endswith("_requirements.json"):
+            return p
+        base = os.path.splitext(os.path.basename(p))[0]
+        cand = os.path.join(RAG_ROOT, "chunks", f"{base}_requirements.json")
+        if os.path.isfile(cand):
+            return cand
+        return None
+    # No arg: only use the requirements file whose base matches the current RFP
+    # source dir if there is exactly one; otherwise refuse (avoid mixing).
     chunks_dir = os.path.join(RAG_ROOT, "chunks")
     if os.path.isdir(chunks_dir):
-        candidates = [os.path.join(chunks_dir, n) for n in sorted(os.listdir(chunks_dir))
-                      if n.endswith("_requirements.json")]
-        if candidates:
-            return candidates[-1]
+        cands = sorted(
+            os.path.join(chunks_dir, n) for n in os.listdir(chunks_dir)
+            if n.endswith("_requirements.json")
+        )
+        if len(cands) == 1:
+            return cands[0]
     return None
 
 
@@ -94,6 +115,38 @@ def clean_template_for_llm(template_text, cap=12000):
     return head_str
 
 
+def short_title(text, max_words=3):
+    """Derive a short 2-3 word heading from a long criterion text.
+
+    Drops leading stop/filler words and focuses on the requirement subject so
+    headings stay short (e.g. "Automated Coaching & Upskilling Workflows must be
+    available, including Asynchronous Training Delivery." -> "Automated Coaching
+    Upskilling"). Empty results fall back to the first max_words words.
+    """
+    if not text:
+        return ""
+    t = re.sub(r"\s+", " ", text.strip())
+    stop = {"the", "a", "an", "and", "or", "of", "to", "for", "in", "on", "with", "&",
+            "must", "should", "shall", "will", "can", "could", "including", "include",
+            "be", "is", "are", "provide", "provided", "ensure", "ensure,"}
+    tokens = [w.strip(".,;:!?()[]{}'\u201c\u201d\u2018\u2019-")
+              for w in re.split(r"[\s&]+", t)]
+    meaningful = [w for w in tokens if w and w.lower() not in stop]
+    if not meaningful:
+        meaningful = tokens
+    pick = meaningful[:max_words]
+    # drop leading determiners that are not meaningful subjects
+    while pick and pick[0].lower() in {"the", "a", "an", "and", "or", "to", "for", "including"}:
+        pick = pick[1:]
+    title = " ".join(pick)
+    title = re.sub(r"^(Including|Include|All|Any|The|A|An|Be|Is|Are|To|Provide|Seamless)\s+", "", title)
+    title = title.strip()
+    if len(title.split()) >= 2:
+        # keep original word casing (acronyms, proper nouns), don't .title() re-mangle
+        pass
+    return title.title() if title else (t[:max_words * 8].title() if t else "")
+
+
 def main():
     args = [a for a in sys.argv[1:]]
     req_path = None
@@ -139,7 +192,8 @@ def main():
 
     sections = []
     coverage = []  # (criterion_text, section_label, status) for the compliance matrix
-    results_dir = os.path.join(os.path.dirname(req_path), "agent3_sections")
+    # Per-RFP results dir so sections never mix across different RFPs.
+    results_dir = os.path.join(os.path.dirname(req_path), f"agent3_chunks_{base}_requirements")
     os.makedirs(results_dir, exist_ok=True)
 
     for idx, crit in enumerate(criteria, 1):
@@ -192,12 +246,15 @@ def main():
     # "Requirements Response" section so nothing is lost.
     header = re.sub(r"\{rfp_title\}", rfp_title, template)
     body_parts = []
+    seq = 0
     for idx, crit in enumerate(criteria, 1):
         text = crit.get("criterion_text", "").strip()
         if not text:
             continue
+        seq += 1
         sec = sections[len(body_parts)]
-        body_parts.append(f"### {idx}. {text}\n\n{sec}")
+        heading = short_title(text)
+        body_parts.append(f"### {seq}. {heading}\n\n*{text}*\n\n{sec}")
 
     assembled = insert_requirements_into_template(header, criteria, body_parts, rfp_title)
 
@@ -261,58 +318,17 @@ def insert_requirements_into_template(template_text, criteria, body_parts, rfp_t
     """Append drafted requirement sections as a structured REQUIREMENTS RESPONSE
     appendix to the template skeleton.
 
-    We do not perform fragile in-place anchor replacement on the template (PDF
-    text contains a table of contents where section-number anchors first match
-    TOC lines, corrupting the document). Instead, the template's full structure
-    and tone are preserved verbatim, and a consolidated, well-ordered
-    "Requirements Response" section is appended at the end — grouped by the
-    template section each requirement maps to (so a reviewer sees, e.g., the
-    security requirements under a "Governance" group).
+    Requirements are already rendered in strict sequential order (### 1. .. ### N.)
+    by the caller, so we keep that order verbatim instead of re-grouping them
+    under template subsections (which previously made numbering look non-sequential
+    when template headings were interleaved). The template structure/tone is
+    preserved at the top as the document body.
     """
-    import re as _re
-
-    outline = _re.findall(r"(\d+(?:\.\d+)?)\.?\s+([A-Za-z][A-Za-z &'/\-():,]+)\n", template_text)
-    section_titles = [name.strip() for _num, name in outline]
-
-    def map_section(crit):
-        cat = (crit.get("category") or "").lower()
-        ctext = (crit.get("criterion_text", "")).lower()
-        for kw, dst in SECTION_KEYWORDS.items():
-            if kw in cat or kw in ctext:
-                # confirm the template actually has this section
-                if any(dst.lower() in t.lower() for t in section_titles):
-                    return dst
-        return None
-
-    groups = {}
-    unmapped = []
-    for crit, part in zip(criteria, body_parts):
-        dst = map_section(crit)
-        if dst:
-            groups.setdefault(dst, []).append(part)
-        else:
-            unmapped.append(part)
-
-    out = template_text.replace("{rfp_title}", rfp_title) if False else template_text
+    out = template_text.replace("{rfp_title}", rfp_title)
     out = out.rstrip()
 
-    parts = []
-    # keep template section order when grouping
-    for title in section_titles:
-        if title in groups:
-            parts.append(f"\n### {title}\n")
-            for g in groups[title]:
-                parts.append(g)
-            parts.append("")
-    if unmapped:
-        parts.append("\n### General / Unmapped Requirements\n")
-        for u in unmapped:
-            parts.append(u)
-            parts.append("")
-
-    if parts:
-        out = out + "\n\n## REQUIREMENTS RESPONSE\n\n" + "\n".join(parts).rstrip() + "\n"
-    return out
+    appendix = "\n\n## REQUIREMENTS RESPONSE\n\n" + "\n\n".join(body_parts).rstrip() + "\n"
+    return out + appendix
 
 
 if __name__ == "__main__":

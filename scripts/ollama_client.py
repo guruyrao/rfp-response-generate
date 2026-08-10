@@ -15,7 +15,10 @@ Env overrides:
   DEEPSEEK_BASE_URL  (default https://api.deepseek.com/v1)
   DEEPSEEK_MODEL     (default deepseek-v4-flash)
   OLLAMA_URL         (default http://localhost:11434)
-   EMBED_MODEL        (default nomic-embed-text)
+   LLAMA_MODEL        (default llama-3.3-70b-versatile)
+   OLLAMA_NUM_CTX     (default 16384; passes num_ctx to Ollama so models like
+                       deepseek-r1:7b can use their native large context)
+    EMBED_MODEL        (default nomic-embed-text)
    OLLAMA_MODEL        (default deepseek-r1:7b)
 """
 import json
@@ -110,6 +113,12 @@ def _chat_ollama(system_prompt, user_prompt, model, format_json):
         {"role": "user", "content": user_prompt},
     ]
     payload = {"model": model, "messages": messages, "stream": False}
+    options = {}
+    num_ctx = os.environ.get("OLLAMA_NUM_CTX")
+    if num_ctx:
+        options["num_ctx"] = int(num_ctx)
+    if options:
+        payload["options"] = options
     if format_json:
         payload["format"] = "json"
     resp = _post(OLLAMA_URL + "/api/chat", payload, {"Content-Type": "application/json"})
