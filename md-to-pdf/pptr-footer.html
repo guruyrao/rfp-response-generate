@@ -1,0 +1,24 @@
+<style>
+  html, body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; }
+  .f-wrap {
+    width: 100%;
+    font-family: "Calibri", "Segoe UI", Arial, sans-serif;
+    font-size: 8pt;
+    color: #475569;
+    padding: 3mm 15mm 0 15mm;
+    border-top: 1px solid #cbd5e1;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .f-left   { color: #64748b; font-style: italic; }
+  .f-center { color: #0b3d91; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; }
+  .f-right  { color: #64748b; }
+  .f-right b { color: #0b3d91; }
+</style>
+<div class="f-wrap">
+  <div class="f-left">&copy; __AUTHOR__ &mdash; Confidential</div>
+  <div class="f-center">__TITLE__ &nbsp;&mdash;&nbsp; v__VERSION__</div>
+  <div class="f-right">Page <b><span class="pageNumber"></span></b> of <span class="totalPages"></span></div>
+</div>

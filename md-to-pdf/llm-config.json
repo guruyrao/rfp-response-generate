@@ -1,0 +1,85 @@
+{
+  "_comment": "LLM diagram-generation config. Edit the top-level fields to switch providers/models without touching code.",
+
+  "provider": "ollama",
+  "model": "qwen2.5-coder:7b",
+
+  "temperature": 0.0,
+  "max_tokens_per_call": 1500,
+  "timeout_seconds": 90,
+  "max_sections": 200,
+
+  "providers": {
+
+    "openai": {
+      "_comment": "Public OpenAI. Set OPENAI_API_KEY in your environment.",
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url": "https://api.openai.com/v1",
+      "default_model": "gpt-4o-mini",
+      "candidate_models": ["gpt-4o-mini", "gpt-4o", "gpt-4.1", "o4-mini"]
+    },
+
+    "azure": {
+      "_comment": "Azure OpenAI. Set AZURE_OPENAI_KEY and AZURE_OPENAI_ENDPOINT (e.g. https://myres.openai.azure.com). 'model' at the top level is the *deployment* name.",
+      "api_key_env": "AZURE_OPENAI_KEY",
+      "base_url_env": "AZURE_OPENAI_ENDPOINT",
+      "api_version": "2024-06-01",
+      "deployment": "gpt-4o-mini"
+    },
+
+    "anthropic": {
+      "_comment": "Anthropic direct. Set ANTHROPIC_API_KEY.",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "base_url": "https://api.anthropic.com/v1",
+      "api_version": "2023-06-01",
+      "default_model": "claude-3-5-sonnet-latest",
+      "candidate_models": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"]
+    },
+
+    "bedrock": {
+      "_comment": "AWS Bedrock. Requires 'pip install boto3'. Uses your standard AWS credentials (profile / env / IAM role).",
+      "region": "us-east-1",
+      "default_model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "candidate_models": [
+        "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "anthropic.claude-3-5-haiku-20241022-v1:0",
+        "anthropic.claude-3-opus-20240229-v1:0"
+      ]
+    },
+
+    "ollama": {
+      "_comment": "Local Ollama server. No key needed. Start it with: ollama serve",
+      "base_url": "http://localhost:11434",
+      "default_model": "qwen2.5-coder:7b",
+      "candidate_models": ["qwen2.5-coder:7b", "qwen2.5-coder:14b", "qwen2.5-coder:32b", "qwen2.5:32b", "llama3.1:70b", "llama3.1:8b", "mistral:7b", "codellama:34b"]
+    },
+
+    "github": {
+      "_comment": "GitHub Models (https://github.com/marketplace/models). Set GITHUB_TOKEN to a PAT with 'models:read' scope OR to your existing GitHub Copilot token. Gives you Claude, GPT-4o, Llama etc via one endpoint.",
+      "api_key_env": "GITHUB_TOKEN",
+      "base_url": "https://models.inference.ai.azure.com",
+      "default_model": "gpt-4o-mini",
+      "candidate_models": [
+        "gpt-4o-mini",
+        "gpt-4o",
+        "Claude-3.5-Sonnet",
+        "Claude-3.5-Haiku",
+        "Meta-Llama-3.1-70B-Instruct",
+        "Meta-Llama-3.1-405B-Instruct",
+        "Phi-3.5-MoE-instruct"
+      ]
+    }
+  },
+
+  "diagrams": {
+    "section_levels": [2, 3],
+    "min_section_words": 60,
+    "max_section_chars": 8000,
+    "cache_dir": "llm-cache",
+    "palette": {
+      "primary": "#0b3d91",
+      "accent":  "#1259c3",
+      "bg":      "#e0edff"
+    }
+  }
+}
