@@ -5,13 +5,55 @@ Usage:
 """
 import json
 import os
+import re
 import sys
+from collections import Counter
 
 import rag
 from ollama_client import chat_retry
 
 PROMPT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts", "extract_requirements.md")
 RAG_ROOT = os.environ.get("RAG_ROOT", r"C:\rag")
+
+# Common all-caps words / acronyms that are NOT the customer organization.
+_ACRONYM_STOP = {
+    "IT", "ITSM", "ICT", "RFP", "PDF", "DOC", "SLA", "KPI", "OS", "LAN",
+    "WAN", "VPN", "CPU", "RAM", "AI", "EU", "UK", "USA", "CCTV", "MSP",
+    "MDM", "M365", "SaaS", "IaaS", "PaaS", "API", "HTTPS", "HTTP", "SQL",
+    "ETL", "BI", "QA", "ITIL", "CISO", "CEO", "CTO", "CFO", "COO", "MS",
+    "IBM", "AWS", "AZURE", "GCP", "VM", "VDI", "SSO", "MFA", "DLP", "EDR",
+    "AV", "UEM", "SLA", "AR", "VR", "NOC", "SOC", "OEM", "TOGAF", "PRINCE",
+    "GDPR", "ISO", "SOC2", "HIPAA", "NIST", "PCI",
+}
+
+
+def detect_customer_name(rfp_text, override=None):
+    """Best-effort detection of the customer organization name from RFP text.
+
+    Priority: explicit override (CUSTOMER_NAME env or CLI) > most frequent
+    all-caps acronym / proper-noun phrase in the document. Returns None if no
+    confident match. Used for the response header and to avoid past-customer
+    names (e.g. "TUI") leaking into the output.
+    """
+    if override and override.strip():
+        return override.strip()
+    if not rfp_text:
+        return None
+    counts = Counter()
+    # All-caps acronyms (e.g. ARIA) — strongest signal, repeated.
+    for m in re.finditer(r"\b[A-Z]{2,}\b", rfp_text):
+        w = m.group(0)
+        if w in _ACRONYM_STOP:
+            continue
+        counts[w] += 1
+    # Proper-noun phrases (e.g. "Advanced Research and Invention Agency").
+    for m in re.finditer(r"\b(?:[A-Z][a-z]+(?:\s+(?:and|&|of)\s+[A-Z][a-z]+){1,3})\b", rfp_text):
+        counts[m.group(0)] += 1
+    if not counts:
+        return None
+    name, n = counts.most_common(1)[0]
+    # Require repeated mentions to avoid picking up a one-off word.
+    return name if n >= 3 else None
 
 
 def load_prompt():
@@ -74,6 +116,13 @@ def main():
 
     print(f"[Agent 1] Reading RFP: {rfp}")
     text = rag.extract_text(rfp)
+    customer_name = detect_customer_name(
+        text, override=os.environ.get("CUSTOMER_NAME")
+    )
+    if customer_name:
+        print(f"[Agent 1] Customer organization detected: {customer_name}")
+    else:
+        print("[Agent 1] WARNING: could not detect customer organization name")
     chunks = rag.chunk_text(text)
     print(f"[Agent 1] {len(chunks)} chunks extracted")
 
@@ -121,7 +170,7 @@ def main():
 
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
-        json.dump({"source": base, "criteria": unique}, f, indent=2, ensure_ascii=False)
+        json.dump({"source": base, "customer_name": customer_name, "criteria": unique}, f, indent=2, ensure_ascii=False)
 
     print(f"[Agent 1] Done. {len(unique)} unique criteria -> {out}")
 

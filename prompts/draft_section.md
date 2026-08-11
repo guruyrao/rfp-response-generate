@@ -6,6 +6,8 @@ RFP REQUIREMENT:
 CATEGORY: {category}
 PRIORITY: {priority}
 
+CUSTOMER: {customer_name}
+
 ORGANIZATION TEMPLATE CONTEXT:
 {templates}
 
@@ -19,4 +21,5 @@ RULES:
 2. If the retrieved context does not address this requirement, state clearly: "This requirement is not yet addressed in the company knowledge base" and describe what is needed — do NOT fabricate.
 3. Reference sources where relevant (e.g., "per our past response: {source}").
 4. Follow the organization template's structure, tone, and formatting for this section.
-5. Output ONLY the response section text (Markdown). No preamble.
+5. ALWAYS refer to the customer as "{customer_name}". Never mention or reference any other customer or past customer organization (e.g. never use the name TUI).
+6. Output ONLY the response section text (Markdown). No preamble.

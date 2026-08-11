@@ -17,6 +17,8 @@ from ollama_client import chat_retry, embed, embed_many
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAFT_PROMPT = os.path.join(BASE_DIR, "prompts", "draft_section.md")
+EXEC_SUMMARY_PROMPT = os.path.join(BASE_DIR, "prompts", "exec_summary.md")
+CORPORATE_INFO_PROMPT = os.path.join(BASE_DIR, "prompts", "corporate_info.md")
 ADD_INSTRUCTIONS = os.path.join(BASE_DIR, "prompts", "additional_instructions.md")
 RAG_ROOT = os.environ.get("RAG_ROOT", r"C:\rag")
 
@@ -67,12 +69,12 @@ def find_requirements(arg):
 
 
 def load_template():
-    """Return the org template content used as the format reference.
+    """Return the org template content used as the format/tone reference ONLY.
 
-    Prefers a PDF template in templates/ (the ATMECS response PDF if present),
-    falling back to response_template.md, then a minimal default skeleton. The
-    returned text is passed to the LLM as {templates} so each drafted section
-    follows the template's structure/tone/format. Env TEMPLATE_FILE overrides.
+    The returned text is passed to the LLM as {templates} so each drafted
+    section follows the template's structure/tone/format. It is NEVER embedded
+    verbatim into the output document — the output is assembled per-RFP with the
+    detected customer name. Env TEMPLATE_FILE overrides.
     """
     templates_dir = os.path.join(RAG_ROOT, "templates")
     override = os.environ.get("TEMPLATE_FILE")
@@ -100,12 +102,34 @@ def _read_template(path):
         return ""
 
 
+# Past-customer organization names that must never appear in a response to a
+# different customer (e.g. the ATMECS-TUI template leaking "TUI" into an ARIA
+# response). Replaced with the detected customer name at assembly time.
+PAST_CUSTOMERS = ["TUI"]
+
+
+def scrub_past_customers(text, customer_name):
+    """Replace known past-customer names with the current customer name.
+
+    Deterministic safety net: even if a cached section was drafted when a past
+    customer was in scope (or an LLM echoed the template), the final document
+    must reference only the current customer.
+    """
+    if not text or not customer_name:
+        return text
+    for name in PAST_CUSTOMERS:
+        text = re.sub(rf"\b{re.escape(name)}\b", customer_name, text)
+    return text
+
+
 def clean_template_for_llm(template_text, cap=12000):
     """Compact the (possibly large PDF) template into a structure summary for the
     per-criterion drafting prompt, so the LLM matches format/tone without a
     90k-token payload per call. Returns top-level numbered section titles only
-    (e.g. "1. Executive Summary") plus a short body excerpt.
+    (e.g. "1. Executive Summary") plus a short body excerpt. Any past-customer
+    names (e.g. TUI) are scrubbed so they cannot leak into the draft.
     """
+    template_text = scrub_past_customers(template_text, "{customer_name}")
     import re as _re
     heads = [m.strip() for m in _re.findall(r"^\d+\.\s+[A-Za-z][A-Za-z &'/\-():,]+$", template_text, _re.MULTILINE)]
     head_str = "TEMPLATE TOP-LEVEL SECTIONS (match this structure/format):\n" + "\n".join(heads[:40])
@@ -170,8 +194,13 @@ def main():
     with open(req_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     base = data.get("source", os.path.splitext(os.path.basename(req_path))[0].replace("_requirements", ""))
+    customer_name = (os.environ.get("CUSTOMER_NAME") or "").strip() or (data.get("customer_name") or "").strip() or None
     criteria = data.get("criteria", [])
     print(f"[Agent 3] {len(criteria)} requirements from {req_path}")
+    if customer_name:
+        print(f"[Agent 3] Customer organization: {customer_name}")
+    else:
+        print("[Agent 3] WARNING: no customer name; response header will use RFP title only")
 
     template = load_template()
     if not template:
@@ -221,6 +250,7 @@ def main():
             .replace("{priority}", crit.get("priority", ""))
             .replace("{templates}", template_for_llm)
             .replace("{retrieved_context}", retrieved_context)
+            .replace("{customer_name}", customer_name or "the client")
         )
 
         print(f"  [{idx}/{len(criteria)}] drafting section for: {text[:60]}...")
@@ -240,11 +270,11 @@ def main():
 
     rfp_title = base.replace("_", " ").replace("-", " ").title()
 
-    # Assemble: use the template skeleton (the ATMECS PDF structure, cleaned) as
-    # the document body, and insert each drafted requirement under the most
-    # relevant numbered section. Unmatched requirements fall into a
-    # "Requirements Response" section so nothing is lost.
-    header = re.sub(r"\{rfp_title\}", rfp_title, template)
+    # Assemble a clean, per-RFP document body. The org template is used ONLY as
+    # the LLM's format reference (template_for_llm above) and is never embedded
+    # verbatim — that previously leaked another customer's content (e.g. TUI)
+    # into the output. Front matter (exec summary, corporate info) is generated
+    # fresh per RFP so no past-customer references leak through.
     body_parts = []
     seq = 0
     for idx, crit in enumerate(criteria, 1):
@@ -256,11 +286,20 @@ def main():
         heading = short_title(text)
         body_parts.append(f"### {seq}. {heading}\n\n*{text}*\n\n{sec}")
 
-    assembled = insert_requirements_into_template(header, criteria, body_parts, rfp_title)
+    front = build_front_matter(customer_name, rfp_title, criteria, sections)
+    body = "\n\n".join(body_parts).rstrip()
 
     # Instruction #9: RFP Compliance Coverage matrix.
     matrix = build_compliance_matrix(criteria, coverage)
-    assembled = assembled.rstrip() + "\n\n---\n\n## REQUIREMENTS RESPONSE -- Compliance Coverage Matrix\n\n" + matrix + "\n"
+    assembled = (
+        front
+        + "\n\n---\n\n## REQUIREMENTS RESPONSE\n\n"
+        + body
+        + "\n\n---\n\n## Compliance Coverage Matrix\n\n"
+        + matrix
+    )
+    # Safety net: the final document must reference only the current customer.
+    assembled = scrub_past_customers(assembled, customer_name)
 
     if not out:
         out = os.path.join(RAG_ROOT, "output", f"{base}_response_v1.md")
@@ -314,21 +353,79 @@ def build_compliance_matrix(criteria, coverage):
     return "\n".join(lines)
 
 
-def insert_requirements_into_template(template_text, criteria, body_parts, rfp_title):
-    """Append drafted requirement sections as a structured REQUIREMENTS RESPONSE
-    appendix to the template skeleton.
+def _generate_front_section(prompt_path, customer_name, rfp_title, criteria, sections, client):
+    """Generate a front-matter section (exec summary / corporate info) with the
+    LLM, grounded in the knowledge base. Falls back to a short placeholder if
+    drafting fails so the pipeline never breaks."""
+    prompt = load_prompt(prompt_path)
+    if not prompt:
+        return ""
+    brief = "\n".join(
+        f"- {(c.get('criterion_text') or '')[:120]}" for c in criteria[:15]
+    )
+    ctx_sources = []
+    for c in criteria[:5]:
+        try:
+            hits = rag.retrieve(c.get("criterion_text", ""), embed, top_k=2, collection=rag.get_collection(client))
+            ctx_sources.extend(
+                f"--- SOURCE: {h.get('metadata', {}).get('source', '?')} ---\n{h['text']}"
+                for h in hits
+            )
+        except Exception:
+            pass
+    context = "\n\n".join(ctx_sources[:6]) if ctx_sources else "No relevant past work found in the knowledge base."
+    user_prompt = (
+        prompt.replace("{customer_name}", customer_name or "the client")
+        .replace("{rfp_title}", rfp_title)
+        .replace("{criteria_brief}", brief)
+        .replace("{retrieved_context}", context)
+    )
+    print(f"[Agent 3] drafting front section from {os.path.basename(prompt_path)} ...")
+    try:
+        text = chat_retry(prompt, user_prompt, format_json=False)
+    except Exception as e:
+        print(f"  front section FAILED: {e}")
+        return ""
+    text = re.sub(r"^\s*#+\s*", "", text).strip()
+    return text
 
-    Requirements are already rendered in strict sequential order (### 1. .. ### N.)
-    by the caller, so we keep that order verbatim instead of re-grouping them
-    under template subsections (which previously made numbering look non-sequential
-    when template headings were interleaved). The template structure/tone is
-    preserved at the top as the document body.
+
+def build_front_matter(customer_name, rfp_title, criteria, sections):
+    """Build the clean document header + per-RFP front matter.
+
+    Header references the detected customer (never a past customer), followed by
+    an LLM-generated Executive Summary and Corporate Information section. The org
+    template text is intentionally NOT embedded here.
     """
-    out = template_text.replace("{rfp_title}", rfp_title)
-    out = out.rstrip()
+    client = None
+    try:
+        client = rag.get_client()
+    except Exception:
+        client = None
 
-    appendix = "\n\n## REQUIREMENTS RESPONSE\n\n" + "\n\n".join(body_parts).rstrip() + "\n"
-    return out + appendix
+    customer = customer_name or "the client"
+    lines = [
+        f"# Response to: {customer}",
+        "",
+        f"## {rfp_title}",
+        "",
+        "This document responds to the RFP requirements listed below.",
+    ]
+    if customer_name:
+        lines += ["", f"Prepared for: **{customer_name}**"]
+
+    exec_summary = _generate_front_section(
+        EXEC_SUMMARY_PROMPT, customer_name, rfp_title, criteria, sections, client
+    )
+    corporate = _generate_front_section(
+        CORPORATE_INFO_PROMPT, customer_name, rfp_title, criteria, sections, client
+    )
+
+    if exec_summary:
+        lines += ["", "---", "", "## Executive Summary", "", exec_summary]
+    if corporate:
+        lines += ["", "---", "", "## Corporate Information", "", corporate]
+    return "\n".join(lines).rstrip()
 
 
 if __name__ == "__main__":
